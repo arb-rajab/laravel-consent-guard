@@ -28,7 +28,12 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.3"
+          # Matches the PHP floor actually required by the committed
+          # composer.lock (Laravel 13.26.x's symfony/* dependencies
+          # require PHP >=8.4.1). This job installs straight from the
+          # lock file rather than re-resolving per matrix cell, so it
+          # must run on a PHP version the lock can satisfy.
+          php-version: "8.4"
           extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite
           coverage: none
 
@@ -54,7 +59,9 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.3"
+          # See the matching comment in the lint job: this must satisfy
+          # the committed composer.lock's actual PHP floor (>=8.4.1).
+          php-version: "8.4"
           extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite
           coverage: none
 
@@ -142,14 +149,9 @@ jobs:
             --recursive
             ./
 
-  codeql:
-    name: CodeQL analysis
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: "php"
-      - uses: github/codeql-action/analyze@v3
+  # No CodeQL job: verified on a real run (2026-08-22) that CodeQL's
+  # language resolver does not recognise "php" at all — `codeql resolve
+  # languages` on CLI 2.26.3 lists cpp/csharp/python/rust/etc. extractors
+  # but no PHP one, so `languages: php` fails at the init step before any
+  # analysis runs. PHP is not a GitHub-supported CodeQL language; Session
+  # 1's inclusion of this job was a wrong assumption, not a config bug.
