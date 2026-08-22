@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 use ArbRajab\ConsentGuard\Consent\ConsentManager;
 use ArbRajab\ConsentGuard\Consent\Contracts\ConsentRepository;
+use ArbRajab\ConsentGuard\Consent\EloquentConsentRepository;
+use ArbRajab\ConsentGuard\Consent\Exceptions\ConsentRequiredException;
+use ArbRajab\ConsentGuard\Tests\Fixtures\Person;
 use ArbRajab\ConsentGuard\Tests\Fixtures\TestUser;
 use ArbRajab\ConsentGuard\Tests\Fixtures\ThrowingConsentRepository;
 use Illuminate\Support\Facades\Route;
@@ -21,12 +24,14 @@ use Illuminate\Support\Facades\Route;
  */
 beforeEach(function () {
     $this->migrateConsentTable();
+    $this->migratePeopleTable();
 
     Route::middleware(['consent-guard:marketing_email'])
         ->get('/consent-guarded', fn () => response()->json(['ok' => true]));
 });
 
 afterEach(function () {
+    $this->dropPeopleTable();
     $this->dropConsentTable();
 });
 
@@ -54,4 +59,33 @@ it('denies the request — rather than allowing it or bubbling a 500 — when th
     $this->actingAs(new TestUser('u-1'))
         ->getJson('/consent-guarded')
         ->assertStatus(403);
+});
+
+/**
+ * The ConsentRequired cast's write path (set()) goes through the exact same
+ * ConsentManager::isGranted() choke point as the middleware — this pair
+ * proves that directly rather than leaving it inferred from the tests
+ * above. The positive control grants real, valid consent first, so the
+ * denial below can't be explained by "there was nothing to grant anyway."
+ */
+it('ConsentRequired cast positive control: allows the write when the lookup succeeds and consent is genuinely granted', function () {
+    $person = Person::create(['name' => 'Ada']);
+    app(ConsentManager::class)->grant(Person::class, $person->id, 'background_check');
+
+    $person->update(['ssn' => '123-45-6789']);
+
+    expect($person->fresh()->ssn)->toBe('123-45-6789');
+});
+
+it('ConsentRequired cast denies the write — rather than allowing it or bubbling an unrelated crash — when the consent lookup throws, even though consent was actually granted', function () {
+    $person = Person::create(['name' => 'Ada']);
+    app(ConsentManager::class)->grant(Person::class, $person->id, 'background_check');
+
+    $this->app->bind(ConsentRepository::class, ThrowingConsentRepository::class);
+
+    expect(fn () => $person->update(['ssn' => '123-45-6789']))
+        ->toThrow(ConsentRequiredException::class, 'requires valid, non-withdrawn consent');
+
+    $this->app->bind(ConsentRepository::class, EloquentConsentRepository::class);
+    expect($person->fresh()->ssn)->toBeNull();
 });
