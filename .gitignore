@@ -1,0 +1,10 @@
+/vendor/
+/build/
+/.phpunit.cache/
+composer.phar
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+.env

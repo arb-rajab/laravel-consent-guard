@@ -1,0 +1,14 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    paths:
+        - src
+
+    level: 8
+
+    tmpDir: build/phpstan
+
+    ignoreErrors:
+        # Intentionally empty. Any future entry here must carry a comment
+        # explaining why the suppression is safe.

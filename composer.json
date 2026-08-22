@@ -1,0 +1,58 @@
+{
+    "name": "arb-rajab/laravel-consent-guard",
+    "type": "library",
+    "description": "Eloquent-native consent tracking and tamper-evident audit logging for Laravel applications.",
+    "keywords": ["laravel", "consent", "gdpr", "audit-log", "compliance", "package"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ahmed Rajab",
+            "email": "yaeouk@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/console": "^12.0|^13.0",
+        "illuminate/contracts": "^12.0|^13.0",
+        "illuminate/database": "^12.0|^13.0",
+        "illuminate/http": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.9",
+        "laravel/pint": "^1.13",
+        "orchestra/testbench": "^10.0|^11.0",
+        "pestphp/pest": "^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "ArbRajab\\ConsentGuard\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ArbRajab\\ConsentGuard\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "lint": "pint --test",
+        "lint:fix": "pint",
+        "analyse": "phpstan analyse --memory-limit=1G",
+        "test": "pest"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "ArbRajab\\ConsentGuard\\ConsentGuardServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
