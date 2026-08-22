@@ -6,6 +6,30 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (Session 2, 2026-08-22)
+- Tamper-evident, hash-chained audit log, generalized out of
+  privacy-forge's application-specific implementation:
+  `ArbRajab\ConsentGuard\AuditLog\AuditLogger` (record/verifyChain),
+  `AuditLogEntry` (append-only Eloquent model), and
+  `HasTamperEvidentAuditLog` (a trait any Eloquent model can use to
+  record entries about itself).
+- Concurrency safety via a single, fixed, global
+  `pg_advisory_xact_lock`, proven with a real test that forks 8 actual
+  OS processes against a real Postgres instance.
+- `consent-guard:secure-audit-log` console command: installable
+  privilege-separation feature that revokes `UPDATE`/`DELETE` on the
+  audit log table from the application's runtime role at the Postgres
+  level, via a genuinely separate, non-owning role — proven with a real
+  test connecting as that role and confirming Postgres itself rejects
+  raw SQL `UPDATE`/`DELETE`.
+- Publishable config (`config/consent-guard.php`) and migration
+  (`create_audit_log_entries_table`).
+- `docs/adr/0001-audit-log-tamper-evidence.md` documenting the design
+  and its generalization from privacy-forge's ADR-0003/R-01.
+- `docker-compose.yml` + `docker/` (Postgres + a PHP dev image) for
+  local development and testing, since this feature requires
+  PostgreSQL and, for the concurrency test, Unix `pcntl`/`posix`.
+
 ### Added (Session 1, 2026-08-22)
 - Initial Composer package skeleton: `type: library`, PSR-4 autoload under
   `ArbRajab\ConsentGuard`, `illuminate/*` component dependencies (not the

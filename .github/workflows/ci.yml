@@ -103,6 +103,34 @@ jobs:
           - php: "8.4"
             laravel: "^13.0"
             testbench: "^11.0"
+    # The audit-log feature is Postgres-specific (pg_advisory_xact_lock,
+    # role-level GRANT/REVOKE) and its concurrency test forks real child
+    # processes (pcntl) — both need a real Postgres instance and a
+    # genuinely separate, restricted "app" role alongside the superuser
+    # that owns the schema. See docker-compose.yml for the equivalent
+    # local dev setup.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: consent_guard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: consent_guard_test
+      DB_USERNAME: consent_guard_app
+      DB_PASSWORD: consent_guard_app_password
+      DB_OWNER_USERNAME: postgres
+      DB_OWNER_PASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -110,7 +138,10 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite
+          # pcntl/posix: real-process concurrency test (Unix-only, hence
+          # this job's ubuntu-latest runner — there is no Windows build).
+          # pdo_pgsql/pgsql: the audit log's only supported database.
+          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite, pdo_pgsql, pgsql, pcntl, posix
           coverage: none
 
       - name: Cache Composer dependencies
@@ -133,6 +164,26 @@ jobs:
 
       - name: Install PHP dependencies
         run: composer update --no-interaction --prefer-dist --no-progress
+
+      - name: Provision the restricted app role
+        # Simulates what a real host application's infrastructure already
+        # provides before installing this package (see
+        # docker/postgres/init/01-create-app-role.sql for the local-dev
+        # equivalent) — a role distinct from the superuser that owns the
+        # schema, which this package's own migration/command then narrow
+        # to SELECT/INSERT on the audit log table specifically.
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d consent_guard_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $do$
+          BEGIN
+              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'consent_guard_app') THEN
+                  CREATE ROLE consent_guard_app LOGIN PASSWORD 'consent_guard_app_password';
+              END IF;
+          END
+          $do$;
+          GRANT CONNECT ON DATABASE consent_guard_test TO consent_guard_app;
+          GRANT USAGE ON SCHEMA public TO consent_guard_app;
+          SQL
 
       - name: Run tests (Pest)
         run: composer test

@@ -51,16 +51,23 @@ project here is a deliberate repeat, not a default, for three reasons:
 
 ## What this is (and isn't) right now
 
-This repository is currently **governance and skeleton only**: a real
-Composer package structure, a passing (placeholder) test suite proven to
-run under Testbench, and CI enforcing lint/static-analysis/tests/security
-scanning across a Laravel version matrix. There is no consent-guard or
-audit-log feature code yet — see Roadmap below.
+This repository now ships one real feature: a **tamper-evident,
+hash-chained audit log**, generalized out of privacy-forge's
+application-specific implementation into something any Eloquent model in
+any Laravel app can use (see [`docs/adr/0001-audit-log-tamper-evidence.md`](docs/adr/0001-audit-log-tamper-evidence.md)
+for the design and its reasoning). There is no consent-guard feature yet
+— see Roadmap below.
 
 ## Requirements
 
 - PHP 8.2+
 - Laravel 12.x or 13.x (via `illuminate/*` components)
+- **PostgreSQL**, for the audit-log feature specifically — it relies on
+  `pg_advisory_xact_lock` for concurrency safety and on real role-level
+  `GRANT`/`REVOKE` for privilege separation, neither of which has a
+  database-agnostic equivalent this package could fall back to. Stated
+  plainly rather than glossed over: this feature does not work on
+  MySQL/SQLite.
 
 ## Installation
 
@@ -71,21 +78,88 @@ composer require arb-rajab/laravel-consent-guard
 The package's service provider is auto-discovered; no manual registration
 is required.
 
+## Tamper-evident audit log
+
+Any Eloquent model can record an entry about itself:
+
+```php
+use ArbRajab\ConsentGuard\AuditLog\Concerns\HasTamperEvidentAuditLog;
+
+class Order extends Model
+{
+    use HasTamperEvidentAuditLog;
+}
+
+$order->recordAuditEntry('order.shipped', ['carrier' => 'ups'], actorType: 'user', actorId: $user->id);
+```
+
+or call the service directly for entries that aren't about a specific
+model:
+
+```php
+app(\ArbRajab\ConsentGuard\AuditLog\AuditLogger::class)->record(
+    actorType: 'system',
+    actorId: null,
+    action: 'nightly-export.completed',
+    subjectType: 'export_batch',
+    subjectId: $batch->id,
+);
+```
+
+Every entry is chained to the one before it
+(`entry_hash = sha256(prev_entry_hash + this_entry's_fields)`);
+`AuditLogger::verifyChain()` replays the whole chain and reports the first
+entry, if any, whose stored hash no longer matches its content.
+
+### Installing it
+
+```bash
+# 1. Publish config + migration
+php artisan vendor:publish --tag=consent-guard-config
+php artisan vendor:publish --tag=consent-guard-migrations
+
+# 2. Run the migration via a connection authenticated as the role that
+#    should OWN the audit log table (see config/consent-guard.php's
+#    "owner_connection" — typically the same role your other migrations
+#    already run as):
+php artisan migrate --database=<owner-connection>
+
+# 3. Lock the table down so the app's own runtime role can SELECT/INSERT
+#    but never UPDATE/DELETE — enforced by Postgres itself, not this
+#    package's application code:
+php artisan consent-guard:secure-audit-log --owner-connection=<owner-connection>
+```
+
+Step 3 is the differentiated part: it requires the application's runtime
+database role to be genuinely distinct from whatever role owns the
+schema. A role revoking its own `UPDATE`/`DELETE` is not a real
+protection — see the ADR for why.
+
 ## Development
+
+This package's test suite now needs real PostgreSQL (see above) plus, for
+the concurrency test, real forked OS processes (`pcntl`/`posix` — Unix
+only). A `docker-compose.yml` is provided for exactly this:
 
 ```bash
 git clone https://github.com/arb-rajab/laravel-consent-guard.git
 cd laravel-consent-guard
-composer install
 
-composer test      # Pest, via Orchestra Testbench
-composer lint      # Laravel Pint (add :fix to auto-fix)
-composer analyse   # Larastan / PHPStan, level 8
+docker compose up -d --build
+docker compose exec php composer install
+
+docker compose exec php composer test      # Pest, via Orchestra Testbench
+docker compose exec php composer lint      # Laravel Pint (add :fix to auto-fix)
+docker compose exec php composer analyse   # Larastan / PHPStan, level 8
 ```
 
-There is no `.env`, no database service, and no application to boot by
-hand — `composer test` spins up and tears down an in-memory Testbench
-application per run.
+If your own machine already has PHP 8.2+ with `pdo_pgsql`/`pgsql` (and,
+for the concurrency test, `pcntl`/`posix`) plus a reachable Postgres, you
+can skip Docker and run `composer test`/`lint`/`analyse` directly — set
+`DB_HOST`/`DB_PORT`/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`/
+`DB_OWNER_USERNAME`/`DB_OWNER_PASSWORD` to match (see `tests/TestCase.php`
+for defaults, and `docker/postgres/init/01-create-app-role.sql` for how
+the restricted test role is provisioned).
 
 ## Roadmap
 
@@ -93,16 +167,18 @@ This package is being built across four sessions of a documented,
 session-based workflow, the same discipline used elsewhere in this
 portfolio:
 
-- **Session 1 (this one): governance and skeleton.** Composer package
-  structure, Testbench-backed test harness with a passing placeholder
-  test, CI (lint, static analysis, tests, Laravel version matrix,
-  secret scanning, CodeQL, dependency vulnerability scanning), and the
-  governance files a real open-source package needs before its first
-  line of feature code.
-- **Session 2: audit-log extraction.** Generalise privacy-forge's
-  tamper-evident, hash-chained audit log into a framework-agnostic
-  (within Laravel) trait/listener pair driven by Eloquent model events,
-  with its own migration and test suite.
+- **Session 1: governance and skeleton.** Composer package structure,
+  Testbench-backed test harness with a passing placeholder test, CI
+  (lint, static analysis, tests, Laravel version matrix, secret
+  scanning, dependency vulnerability scanning), and the governance files
+  a real open-source package needs before its first line of feature
+  code.
+- **Session 2 (this one): audit-log extraction.** privacy-forge's
+  tamper-evident, hash-chained audit log, generalized into an
+  `AuditLogger` service and `HasTamperEvidentAuditLog` trait any
+  Eloquent model can use, plus the privilege-separation feature
+  (`consent-guard:secure-audit-log`) that makes "no UPDATE/DELETE"
+  something Postgres itself enforces.
 - **Session 3: consent-guard middleware and casts.** The
   consent-tracking half: a `HasConsent`-style Eloquent trait, an
   attribute cast for consent state, and route middleware that enforces
