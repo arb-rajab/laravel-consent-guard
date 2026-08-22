@@ -424,3 +424,220 @@ fact — not made silently and normalized by repetition.
 
 Unchanged from Session 2 — Session 3 (consent-guard middleware and
 casts), then Session 4 (Packagist publishing).
+
+## Session 3 — 2026-08-22: consent guard (new design, fail-closed by principle)
+
+### What's built
+
+This is **new package design, not an extraction** — unlike Session 2,
+no privacy-forge code was reused. What's borrowed is a *principle*:
+privacy-forge's `docs/adr/ADR-0006-policy-evaluator-fail-closed.md` was
+read (read-only) for its fail-closed reasoning; its `PolicyEvaluator`
+code was never touched, imported, or depended on.
+
+- **`ArbRajab\ConsentGuard\Consent\ConsentManager`** —
+  `grant()`/`withdraw()`/`isGranted()`. `isGranted()` is the single
+  fail-closed choke point every other part of this feature calls
+  through rather than re-implementing: no record, a withdrawn record,
+  an expired record, or the lookup itself throwing all resolve to
+  `false`, never `true`. Deliberately registered as a plain (non-
+  singleton) binding — see "Decisions" below for why that matters, not
+  just stylistically.
+- **`Consent\ConsentRecord`** — current-state Eloquent model, one row
+  per `(subject_type, subject_id, purpose)` (unique-indexed), unlike
+  the audit log's append-only history — consent status needs "what's
+  true right now," not a change history.
+- **`Consent\Concerns\HasConsent`** + **`Consent\Contracts\ConsentSubject`**
+  — trait/interface pairing (mirrors Laravel's own
+  `MustVerifyEmail`/`CanVerifyEmail`) giving a model
+  `grantConsent()`/`withdrawConsent()`/`hasConsent()` plus the identity
+  methods (`consentSubjectType()`/`consentSubjectId()`) the cast and
+  middleware need.
+- **`Consent\Casts\ConsentRequired`** — custom Eloquent cast
+  (`'field' => ConsentRequired::class.':purpose'`) gating both read and
+  write of one attribute behind a named purpose; throws
+  `ConsentRequiredException` (which itself renders as a 403) when
+  consent isn't valid, or when the model isn't a determinable
+  `ConsentSubject` at all.
+- **`Consent\Http\Middleware\EnsureConsentGranted`** (registered as the
+  `consent-guard` route middleware alias via the service provider's
+  `boot(Router $router)`) — denies with a configurable status/message
+  ahead of the controller unless `$request->user()` implements
+  `ConsentSubject` and has valid consent for the purpose named in the
+  route (`Route::middleware('consent-guard:marketing_email')`).
+- **`consent-guard:sweep-expired-consent`** — retention sweep. Finds
+  `ConsentRecord` rows whose `withdrawn_at`/`expires_at` is older than a
+  configurable grace period (global default, or a per-purpose override
+  in config) and dispatches `Consent\Events\ConsentGracePeriodElapsed`
+  for each, optionally (`purge_expired_records`) deleting the
+  `ConsentRecord` row afterward. Deliberately does not touch any of the
+  host app's own gated fields/rows — this package has no schema of the
+  host's to act on, so the event is the handoff point; supports
+  `--dry-run`.
+- **`Consent\Contracts\ConsentRepository`** — the one seam between
+  `ConsentManager` and the actual lookup (`EloquentConsentRepository` by
+  default), added specifically so a test can swap in a throwing fake to
+  prove the fail-closed guarantee deterministically rather than trying
+  to corrupt a real database connection at exactly the right moment.
+- Publishable `database/migrations/..._create_consent_records_table.php`
+  and a new `consent` section in `config/consent-guard.php` — an
+  adopting app registers its own purposes (and optional per-purpose
+  grace-period overrides) there, with zero package-internal code
+  changes needed for a new purpose.
+- `docs/adr/0002-consent-guard-fail-closed.md`.
+
+### What's proven, and how
+
+- **`ConsentFailClosedFaultInjectionTest`** — the required proof.
+  Grants real, valid consent for a subject *first* (ruling out "there
+  was nothing to grant anyway" as an innocent explanation), then rebinds
+  `Contracts\ConsentRepository` to a fake that unconditionally throws,
+  and confirms: (1) `ConsentManager::isGranted()` still returns `false`
+  rather than letting the exception propagate; (2) an HTTP request
+  through `EnsureConsentGranted` still gets a `403`, not a `200` and not
+  an unhandled `500`. A positive control in the same file (working
+  repository, granted consent) proves the route genuinely allows access
+  when nothing is broken, so the denial in the fault case is
+  attributable to the fault, not to the route being broken outright.
+- **Full suite: 40/40 passing** against real Postgres via this
+  session's Docker workflow (`docker compose exec php composer test`) —
+  the pre-existing 12 audit-log tests unaffected, plus 28 new
+  consent-guard tests (`ConsentManagerTest`, `ConsentRequiredCastTest`,
+  `EnsureConsentGrantedMiddlewareTest`, `ConsentFailClosedFaultInjectionTest`,
+  `SweepExpiredConsentCommandTest`).
+- `composer lint` (Pint) clean and `vendor/bin/phpstan analyse
+  --memory-limit=1G` (Larastan, level 8) clean against `src` — both run
+  for real inside the Docker container, not assumed.
+
+### Bugs/gaps found while proving this for real (not caught by writing the code)
+
+- **`ConsentManager` registered as a container singleton would have
+  silently defeated the fault-injection test.** First draft called
+  `$this->app->singleton(ConsentManager::class)` in the service
+  provider, mirroring `AuditLogger`'s registration style. Once anything
+  resolves `ConsentManager` once, a singleton caches that instance —
+  including whatever `ConsentRepository` was bound into its constructor
+  at that first resolution — so a test's later `$this->app->bind(ConsentRepository::class, ThrowingConsentRepository::class)`
+  would have had no effect on the already-cached instance, and the
+  fault-injection test would have silently passed for the wrong reason
+  (or, worse, silently failed to prove anything while still going
+  green). Caught by reasoning through the container's resolution order
+  before running it, not by a failing test — fixed by not registering
+  `ConsentManager` as a singleton at all (Laravel's container
+  auto-resolves the concrete class fresh each time via reflection,
+  re-reading whatever `ConsentRepository` binding is current).
+- **The test Postgres sandbox's restricted "app" role has zero
+  privileges on a table it doesn't own — not even the ones needed for
+  ordinary CRUD** — found by actually running the suite, not assumed.
+  Consent guard has no privilege-separation feature of its own, so its
+  migration was first written to run on the default (`pgsql`, i.e. the
+  restricted `consent_guard_app` role) connection directly, the way a
+  real single-role app's migrations would. But *this test environment*
+  reuses the audit log's two-role Postgres setup for infra convenience,
+  and that role was deliberately never granted `CREATE` on schema
+  `public` (correctly — Session 2's whole point). First real run failed
+  every consent test with Postgres's own `42501 permission denied for
+  schema public`. Fixed in
+  `tests/Feature/Consent/InteractsWithConsentSchema.php` only (not in
+  the package's own migration, which is correct as written for a real
+  single-role app): create the test tables via the owning connection,
+  then explicitly `GRANT SELECT, INSERT, UPDATE, DELETE` on them to the
+  app role — a step a real single-role Laravel app would never need,
+  since it would already own tables it migrates.
+- **`illuminate/routing` was missing from `composer.json`'s `require`**,
+  discovered while adding the middleware alias (`Router` lives in that
+  split package, not `illuminate/http`) — added to both `require` and
+  the CI matrix's per-cell version-selection step (previously only
+  console/contracts/database/http/support were listed there), and
+  `composer update` was run for real to confirm the new constraint
+  resolves cleanly (it does — `illuminate/routing` is satisfied via
+  `laravel/framework`'s `replace`, the same way the other split
+  packages already were, so no new package download, only a
+  `content-hash` and unrelated transitive `symfony/*` patch bumps in
+  `composer.lock`).
+
+### Decisions made this session, with reasoning
+
+- **A current-state table (`ConsentRecord`, unique per subject+purpose),
+  not an append-only history like the audit log.** The question this
+  feature answers is "is consent valid right now," not "what changed
+  and when" — a different shape for a different question. An adopting
+  app that wants a tamper-evident history of consent changes can layer
+  `AuditLog\Concerns\HasTamperEvidentAuditLog` on top of its own
+  `grantConsent()`/`withdrawConsent()` call sites; this package doesn't
+  wire the two features together itself, since not every consumer of
+  one wants the other.
+- **Fail-closed as the one property every entry point shares, enforced
+  in a single method (`ConsentManager::isGranted()`) rather than
+  re-implemented in the cast and the middleware separately.** Both call
+  through the same method specifically so there is exactly one place
+  the fail-closed guarantee can be gotten wrong, and exactly one test
+  needs to prove it.
+- **`Contracts\ConsentRepository` as a first-class seam**, not just an
+  internal implementation detail — added specifically to make the
+  fault-injection technique (rebind to a throwing fake) available to
+  this package's own tests and to any adopting app's tests, rather than
+  requiring either to corrupt a real database connection to prove the
+  same thing.
+- **No privilege separation, no Postgres requirement.** The audit log's
+  threat model is "the app's own runtime credential must not be able to
+  rewrite history even if compromised" — there's no equivalent threat
+  here; the app's own role legitimately needs full CRUD on
+  `consent_records` (grant, withdraw, purge). Nothing in this feature
+  uses Postgres-specific mechanisms, so — unlike the audit log — it
+  works on any database Laravel supports; it's tested against Postgres
+  here purely for infra reuse with the already-provisioned sandbox.
+- **Retention is an event (`ConsentGracePeriodElapsed`), not a
+  package-owned deletion of the host's own data.** This package has no
+  visibility into what an adopting app's gated fields or rows actually
+  are, so `consent-guard:sweep-expired-consent` can only ever safely
+  delete its *own* `ConsentRecord` row (optionally, via
+  `purge_expired_records`) — anything about the host's own schema is
+  necessarily the host's decision, made in its own event listener.
+  Considered giving the package a way to declare "which model/column
+  this purpose gates" and closing the loop automatically; rejected as
+  scope creep into every possible host schema shape (soft deletes,
+  polymorphic relations, computed anonymization) that a generic package
+  has no business modeling.
+- **No enforced registry of valid purposes.** `config('consent-guard.consent.purposes')`
+  is read only for its optional `grace_period_days` override — a
+  purpose string not listed there still works everywhere else (the
+  cast, `hasConsent()`, the middleware). Requiring upfront registration
+  was considered and rejected: it would mean every new purpose needs
+  both a config change *and* a code change, which is exactly the
+  "editing package internals" friction the config file exists to avoid
+  per this session's brief.
+- **No GDPR/DSAR-specific terminology anywhere in the public API** —
+  "purpose," "subject," "grant," "withdraw," matching the same bar
+  Session 2 held the audit log's field names to. Verified directly
+  against the brief's own ground rule by re-reading every public class/
+  method name in `src/Consent` before finishing.
+
+### Explicitly not done this session (by design)
+
+- No coupling between consent guard and the audit log — see "Decisions"
+  above.
+- No automatic action on the host app's own gated data — the retention
+  sweep only ever dispatches an event and (optionally) deletes its own
+  `ConsentRecord` row.
+- No enforced/validated purpose registry.
+- privacy-forge's own repository was not touched in any way (its
+  `PolicyEvaluator` code specifically was never read for anything other
+  than the one ADR file, read-only, cited above).
+
+### What's next
+
+- **Session 4: real integration proof, compatibility matrix, release
+  readiness, Packagist publishing.** Tag `v1.0.0`, publish to Packagist,
+  write `UPGRADE.md` covering the Laravel-major boundaries the CI matrix
+  already exercises. Per this session's own brief, Session 4 should also
+  include a real integration proof (both features installed together in
+  a throwaway host app) and a compatibility matrix, not just a version
+  tag.
+- **CI verification for this session's branch is still pending** as of
+  this entry being written — `feat/consent-guard` has been pushed and a
+  PR opened, but (per the Session 2.5 standing rule: branch → PR →
+  required-checks-pass → merge, no exceptions) this session does not
+  merge until the real GitHub Actions run is confirmed green, the same
+  discipline Session 2 and 2.5 followed. See the PR itself for the
+  actual run result.
