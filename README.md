@@ -51,23 +51,32 @@ project here is a deliberate repeat, not a default, for three reasons:
 
 ## What this is (and isn't) right now
 
-This repository now ships one real feature: a **tamper-evident,
-hash-chained audit log**, generalized out of privacy-forge's
-application-specific implementation into something any Eloquent model in
-any Laravel app can use (see [`docs/adr/0001-audit-log-tamper-evidence.md`](docs/adr/0001-audit-log-tamper-evidence.md)
-for the design and its reasoning). There is no consent-guard feature yet
-— see Roadmap below.
+This repository now ships two real features:
+
+- A **tamper-evident, hash-chained audit log**, generalized out of
+  privacy-forge's application-specific implementation into something any
+  Eloquent model in any Laravel app can use (see
+  [`docs/adr/0001-audit-log-tamper-evidence.md`](docs/adr/0001-audit-log-tamper-evidence.md)).
+- **Consent guard**: a `ConsentRequired` cast, `EnsureConsentGranted`
+  middleware, and a retention-sweep Artisan command that gate a field or
+  action behind recorded, non-withdrawn consent — genuinely new design
+  for this package (not extracted from privacy-forge), inspired only by
+  privacy-forge's fail-closed *principle* for its policy evaluator, not
+  its code (see [`docs/adr/0002-consent-guard-fail-closed.md`](docs/adr/0002-consent-guard-fail-closed.md)).
+
+See Roadmap below for what's still to come.
 
 ## Requirements
 
 - PHP 8.2+
 - Laravel 12.x or 13.x (via `illuminate/*` components)
-- **PostgreSQL**, for the audit-log feature specifically — it relies on
+- **PostgreSQL, for the audit-log feature specifically** — it relies on
   `pg_advisory_xact_lock` for concurrency safety and on real role-level
   `GRANT`/`REVOKE` for privilege separation, neither of which has a
   database-agnostic equivalent this package could fall back to. Stated
-  plainly rather than glossed over: this feature does not work on
-  MySQL/SQLite.
+  plainly rather than glossed over: that one feature does not work on
+  MySQL/SQLite. Consent guard has no such requirement — it's plain
+  Eloquent CRUD and works on any database Laravel supports.
 
 ## Installation
 
@@ -135,6 +144,92 @@ database role to be genuinely distinct from whatever role owns the
 schema. A role revoking its own `UPDATE`/`DELETE` is not a real
 protection — see the ADR for why.
 
+## Consent guard
+
+Mark your own user (or any other) model as a consent subject:
+
+```php
+use ArbRajab\ConsentGuard\Consent\Concerns\HasConsent;
+use ArbRajab\ConsentGuard\Consent\Contracts\ConsentSubject;
+
+class User extends Authenticatable implements ConsentSubject
+{
+    use HasConsent;
+}
+```
+
+Grant, withdraw, and check consent for any purpose your own app defines —
+`"marketing_email"` below is just an example string, not something this
+package attaches special meaning to:
+
+```php
+$user->grantConsent('marketing_email');
+$user->hasConsent('marketing_email'); // true
+$user->withdrawConsent('marketing_email');
+$user->hasConsent('marketing_email'); // false
+```
+
+Gate an Eloquent attribute behind a purpose — both reading and writing it
+require valid, non-withdrawn consent, or a `ConsentRequiredException` is
+thrown:
+
+```php
+use ArbRajab\ConsentGuard\Consent\Casts\ConsentRequired;
+
+class User extends Authenticatable implements ConsentSubject
+{
+    use HasConsent;
+
+    protected $casts = [
+        'ssn' => ConsentRequired::class.':background_check',
+    ];
+}
+```
+
+Gate a route behind a purpose — denies with a `403` ahead of the
+controller if the authenticated user hasn't implemented `ConsentSubject`
+or doesn't have valid consent for it:
+
+```php
+Route::middleware('consent-guard:marketing_email')->post('/newsletter/subscribe', ...);
+```
+
+Both the cast and the middleware are **fail-closed**: if consent status
+can't be determined at all (a lookup failure, an undeterminable subject),
+access is denied, never silently allowed — see
+[`docs/adr/0002-consent-guard-fail-closed.md`](docs/adr/0002-consent-guard-fail-closed.md).
+
+Sweep consent records whose withdrawal/expiry is past its grace period —
+dispatches `ConsentGracePeriodElapsed` for your own app to act on (this
+package has no idea what your gated fields/rows actually are, so it
+can't delete or anonymize them for you):
+
+```bash
+php artisan consent-guard:sweep-expired-consent          # dispatches + optionally purges
+php artisan consent-guard:sweep-expired-consent --dry-run # reports only
+```
+
+```php
+use ArbRajab\ConsentGuard\Consent\Events\ConsentGracePeriodElapsed;
+
+Event::listen(function (ConsentGracePeriodElapsed $event) {
+    // e.g. anonymize or delete whatever your app gated on
+    // ($event->subjectType, $event->subjectId, $event->purpose)
+});
+```
+
+### Installing it
+
+```bash
+php artisan vendor:publish --tag=consent-guard-config
+php artisan vendor:publish --tag=consent-guard-migrations
+php artisan migrate
+```
+
+Unlike the audit log, there is no privilege-separation step — consent
+records need ordinary full CRUD from the application's own runtime role,
+and nothing here is Postgres-specific.
+
 ## Development
 
 This package's test suite now needs real PostgreSQL (see above) plus, for
@@ -173,16 +268,18 @@ portfolio:
   scanning, dependency vulnerability scanning), and the governance files
   a real open-source package needs before its first line of feature
   code.
-- **Session 2 (this one): audit-log extraction.** privacy-forge's
-  tamper-evident, hash-chained audit log, generalized into an
-  `AuditLogger` service and `HasTamperEvidentAuditLog` trait any
-  Eloquent model can use, plus the privilege-separation feature
-  (`consent-guard:secure-audit-log`) that makes "no UPDATE/DELETE"
-  something Postgres itself enforces.
-- **Session 3: consent-guard middleware and casts.** The
-  consent-tracking half: a `HasConsent`-style Eloquent trait, an
-  attribute cast for consent state, and route middleware that enforces
-  a consent check ahead of a controller.
+- **Session 2: audit-log extraction.** privacy-forge's tamper-evident,
+  hash-chained audit log, generalized into an `AuditLogger` service and
+  `HasTamperEvidentAuditLog` trait any Eloquent model can use, plus the
+  privilege-separation feature (`consent-guard:secure-audit-log`) that
+  makes "no UPDATE/DELETE" something Postgres itself enforces.
+- **Session 3 (this one): consent guard.** New package design (not an
+  extraction): a `ConsentRequired` cast and `HasConsent`/`ConsentSubject`
+  pairing that gate an Eloquent attribute behind a named consent purpose,
+  an `EnsureConsentGranted` middleware that gates a route the same way,
+  and `consent-guard:sweep-expired-consent` for retention. Fail-closed by
+  principle (inspired by, but not sharing code with, privacy-forge's
+  policy-evaluator ADR).
 - **Session 4: Packagist publishing and upgrade documentation.**
   Tagged `v1.0.0`, published to Packagist, with an `UPGRADE.md` for the
   Laravel-major boundaries the CI matrix already covers.

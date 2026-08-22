@@ -6,6 +6,55 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (Session 3, 2026-08-22)
+- Consent guard: new package design (not extracted from privacy-forge),
+  inspired by that repository's fail-closed policy-evaluator *principle*
+  (ADR-0006) rather than sharing any of its code.
+  - `Consent\ConsentManager`: `grant()`/`withdraw()`/`isGranted()`, the
+    single fail-closed choke point every other part of this feature
+    calls through — any ambiguous or error state (no record, withdrawn,
+    expired, or the lookup itself throwing) resolves to "not granted."
+  - `Consent\ConsentRecord`: current-state Eloquent model, one row per
+    (subject, purpose).
+  - `Consent\Concerns\HasConsent` + `Consent\Contracts\ConsentSubject`:
+    trait/interface pairing (mirroring Laravel's own
+    `MustVerifyEmail`/`CanVerifyEmail`) giving a model
+    `grantConsent()`/`withdrawConsent()`/`hasConsent()`.
+  - `Consent\Casts\ConsentRequired`: Eloquent attribute cast gating a
+    single field's read and write behind a named purpose.
+  - `Consent\Http\Middleware\EnsureConsentGranted` (registered as the
+    `consent-guard` route middleware alias): denies ahead of the
+    controller unless the authenticated user implements
+    `ConsentSubject` and has valid consent for the named purpose.
+  - `consent-guard:sweep-expired-consent` console command: dispatches
+    `Consent\Events\ConsentGracePeriodElapsed` for records past their
+    configured grace period, optionally purging the `ConsentRecord` row
+    itself — deliberately does not touch the host app's own gated data,
+    since this package has no schema of the host's to act on.
+  - `Consent\Contracts\ConsentRepository`: the one seam between
+    `ConsentManager` and the actual lookup, added specifically so a test
+    (or an adopting app's own) can swap in a throwing fake to prove the
+    fail-closed guarantee deterministically.
+  - Publishable `database/migrations/..._create_consent_records_table.php`
+    and a new `consent` section in `config/consent-guard.php`
+    (connection/table, grace periods, per-purpose overrides,
+    `purge_expired_records`, deny status/message) — no code changes
+    needed to register a new purpose.
+  - `docs/adr/0002-consent-guard-fail-closed.md`.
+- `ConsentFailClosedFaultInjectionTest`: grants real consent, then makes
+  the lookup itself throw, and proves both `ConsentManager::isGranted()`
+  (returns `false`, does not throw) and `EnsureConsentGranted` (denies
+  with 403, not 200 or an unhandled 500) fail closed — with a positive
+  control proving the same route allows access when nothing is broken.
+- New dependency: `illuminate/routing` (needed for the `consent-guard`
+  middleware alias) — added to `composer.json`'s `require` and to the CI
+  matrix's per-cell version selection, not left to resolve implicitly
+  via `laravel/framework`.
+- Unlike the audit log, consent guard is not Postgres-specific — plain
+  Eloquent CRUD, no privilege separation. This package's own tests still
+  run it against the same Postgres instance already provisioned for the
+  audit log, purely for local/CI infra reuse.
+
 ### Changed (Session 2.5, 2026-08-22)
 - `docs/adr/0001-audit-log-tamper-evidence.md`: added a "Generalization
   decisions specific to this package" section documenting the

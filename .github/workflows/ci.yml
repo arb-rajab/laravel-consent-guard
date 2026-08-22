@@ -158,6 +158,7 @@ jobs:
             "illuminate/contracts:${{ matrix.laravel }}" \
             "illuminate/database:${{ matrix.laravel }}" \
             "illuminate/http:${{ matrix.laravel }}" \
+            "illuminate/routing:${{ matrix.laravel }}" \
             "illuminate/support:${{ matrix.laravel }}"
           composer require --no-interaction --no-update --dev \
             "orchestra/testbench:${{ matrix.testbench }}"

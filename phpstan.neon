@@ -21,3 +21,11 @@ parameters:
             # consumers outside the package; the trait's own test coverage
             # (tests/Feature/AuditLog/AuditLogHashChainTest.php) applies it
             # to a model precisely to prove it works.
+        -
+            identifier: trait.unused
+            path: src/Consent/Concerns/HasConsent.php
+            # Same reasoning as HasTamperEvidentAuditLog above: this trait
+            # is meant to be `use`d by a consuming application's own
+            # ConsentSubject model (see README.md), not by anything under
+            # `src` itself. tests/Fixtures/Person.php and
+            # tests/Fixtures/TestUser.php apply it to prove it works.
