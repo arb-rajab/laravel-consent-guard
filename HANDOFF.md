@@ -641,3 +641,68 @@ code was never touched, imported, or depended on.
   merge until the real GitHub Actions run is confirmed green, the same
   discipline Session 2 and 2.5 followed. See the PR itself for the
   actual run result.
+
+## Session 3.5 — 2026-08-23: closed the one fault-injection gap left by Session 3
+
+Short, bounded verification session, not new feature work. Session 3's
+`ConsentFailClosedFaultInjectionTest` proved `ConsentManager::isGranted()`
+and the `EnsureConsentGranted` middleware both fail closed when the
+consent lookup throws, but never directly exercised the `ConsentRequired`
+cast's *write* path (`set()`) under that same fault — its fail-closed
+behavior was only inferred from `ConsentManager`'s guarantee, not proven.
+
+### What was found
+
+Reading `Consent\Casts\ConsentRequired::set()` showed it calls the same
+`assertConsent()` private method as `get()`, which calls through
+`ConsentManager::isGranted()` — the same fail-closed choke point the
+middleware already goes through. So by design, the write path should
+already fail closed. **This was confirmed directly, not just by
+reasoning about the code**: two new tests were added to
+`ConsentFailClosedFaultInjectionTest.php` (a positive control that
+grants real consent and writes successfully, and the fault-injection
+case that grants real consent, rebinds `ConsentRepository` to the
+existing `ThrowingConsentRepository` fake, and asserts the write throws
+`ConsentRequiredException` rather than succeeding or crashing
+uninformatively). Both passed.
+
+**Proven to have teeth**, the same way Session 2's concurrency test was:
+temporarily removed the `assertConsent()` call from `set()` (simulating
+the exact failure mode the task was worried about — a write path that
+doesn't call the consent lookup at all) and reran the suite. The new
+test failed as expected (`ConsentRequiredException` not thrown), and so
+did both of `ConsentRequiredCastTest`'s existing write-path tests —
+confirming those tests were already covering this path correctly, not
+passing by accident. Reverted the change; full suite green again.
+
+**Conclusion: no bug existed.** The write path already failed closed by
+design, sharing `ConsentManager::isGranted()`'s guarantee rather than
+re-implementing (or forgetting to implement) it separately. This session
+added direct proof of that; no production code changed.
+
+### Other findings this session
+
+- **This Windows dev machine's global `core.autocrlf=true` makes every
+  tracked file in this repo appear modified to Pint** (checked-out
+  working-tree line endings are CRLF; every git-stored blob is LF, as it
+  should be — confirmed via `git show HEAD:<file> | file -`, which
+  reports plain ASCII/UTF-8 text, no CRLF). `composer lint` inside the
+  Docker container reads the CRLF working copy and flags `line_ending`
+  on all 36 files, unrelated to any real content change — reproduced
+  even on a clean `git stash` with zero local edits. Worked around
+  locally this session by stripping `\r` from every tracked text file
+  in the container (`sed -i 's/\r$//'`) purely to get a real Pint read,
+  then reverting everything except this session's actual test edit via
+  `git checkout --` before committing (`git diff` confirmed byte-for-
+  byte no substantive change to any reverted file). This is a per-
+  machine git config issue, not a repository problem — no `.gitattributes`
+  exists to normalize it, and this session did not add one, since doing
+  so wasn't in scope and CI (Linux runners) isn't affected. Worth fixing
+  properly (a `.gitattributes` with `* text=auto eol=lf`) in a future
+  session if this recurs.
+
+### What's next
+
+Session 4 as already scoped above: real integration proof, compatibility
+matrix, release readiness, Packagist publishing. Nothing about this
+session changes that scope.
