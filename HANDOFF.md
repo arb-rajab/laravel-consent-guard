@@ -80,6 +80,102 @@ this is a small supporting package, not the portfolio's flagship).
 
 ### What's next
 
+See the "What's next" roadmap under Session 1.5 below — it supersedes
+this one (unchanged in substance, but that section also records that
+CI is now verified for real before Session 2 starts).
+
+### Explicitly not done this session (by design)
+
+- No audit-log or consent-guard feature code — none was in scope.
+- privacy-forge's own repository was not touched in any way.
+- No Packagist publish yet — nothing worth publishing exists.
+
+## Session 1.5 — 2026-08-22: CI verified on real GitHub Actions infrastructure
+
+Session 1's CI was only ever validated against a local scratch-copy
+approximation. This short closeout session pushed the repo to GitHub
+and let CI run for real, closing that gap before Session 2 starts.
+
+### What's done
+
+- Created `arb-rajab/laravel-consent-guard` on GitHub (public), pushed
+  the full local history (`faf7eab`, then this session's fix commit)
+  to `main`.
+- **CI has now genuinely run on GitHub's hosted runners, not just
+  locally.** First real run
+  ([32572185620](https://github.com/arb-rajab/laravel-consent-guard/actions/runs/32572185620))
+  failed — see below. After fixes, the second run
+  ([32572916557](https://github.com/arb-rajab/laravel-consent-guard/actions/runs/32572916557))
+  passed in full: all 8 jobs green, including all 4 test-matrix cells
+  (PHP 8.2+Laravel 12, PHP 8.3+Laravel 12, PHP 8.3+Laravel 13, PHP
+  8.4+Laravel 13).
+- Branch protection configured on `main`: all 8 CI check contexts
+  required to pass (`strict: true`, i.e. branch must be up to date),
+  force-pushes disabled, branch deletion disabled. No PR-review
+  requirement was added (single-maintainer repo at this stage).
+
+### Real failures found on GitHub's runners that local testing never caught
+
+The task explicitly anticipated this gap, and it was real, not
+theoretical. Three independent bugs surfaced on the first live run:
+
+1. **CodeQL does not support PHP, at all.** `codeql resolve languages`
+   on CLI 2.26.3 lists extractors for cpp/csharp/python/rust/etc. but
+   none for PHP — the job failed at the `init` step with "Did not
+   recognize the following languages: php" before any analysis could
+   run. This wasn't a config mistake to patch; PHP is simply not a
+   GitHub-supported CodeQL language. **Fix: removed the CodeQL job
+   entirely** and documented why inline in `ci.yml`, rather than
+   chasing a workaround for something that doesn't exist.
+2. **`composer.lock` was generated on a local PHP 8.5.8 machine.**
+   With `illuminate/*` left unconstrained between `^12.0|^13.0`,
+   composer's default resolution (no matrix override) picked the
+   newest satisfiable chain — Laravel 13.26.1 pulling symfony 8.1.x,
+   which requires PHP `>=8.4.1`. The `lint` and `analyse` jobs install
+   straight from that lock file but were pinned to PHP 8.3, so
+   `composer install` failed there with a lock/platform mismatch. This
+   is exactly the "local machine differs from the CI runner"
+   divergence the task called out as a real possibility — the local
+   dev environment used in Session 1 was never PHP 8.3, so this was
+   never actually exercised before now. **Fix: bumped `lint` and
+   `analyse` jobs to PHP 8.4** to match what the committed lock
+   actually requires (each test-matrix cell already re-resolves its
+   own dependencies live via `composer update`, so the matrix itself
+   was unaffected by this).
+3. **`pestphp/pest: ^4.0` requires PHP `^8.3`, but `composer.json`
+   declares `"php": "^8.2"` and the CI matrix advertises a PHP
+   8.2+Laravel 12 cell.** That cell could never resolve as declared —
+   pest 4 simply won't install under PHP 8.2, on GitHub or anywhere
+   else. Session 1's local verification never caught this because it
+   was run on a single local PHP version, not per-matrix-cell — the
+   "real version-support matrix" claim was aspirational, not yet
+   proven, until this session actually pushed the button. **Fix:
+   widened the constraint to `"pestphp/pest": "^3.0|^4.0"`** in
+   `require-dev`, so composer resolves Pest 3.x under PHP 8.2 and Pest
+   4.x under PHP 8.3+, matching each matrix cell's real platform. This
+   is a dev-only constraint change; the package's own `"php": "^8.2"`
+   floor in `require` is unaffected and still accurate.
+
+All three fixes were verified for real on GitHub Actions in the same
+session (run 32572916557), not just reasoned about — including
+confirming Pest actually resolves to a 3.x version under PHP 8.2 in
+that cell, since a local PHP 8.2 binary wasn't available to double check
+directly.
+
+### Non-blocking, left as-is
+
+- All jobs carry a "Node.js 20 is deprecated" annotation from
+  third-party actions (`actions/checkout@v4`, `actions/cache@v4`,
+  `gitleaks/gitleaks-action@v2`) being forced onto Node 24 by the
+  runner. Informational only, not a failure, not something introduced
+  by this repository's own workflow — left alone.
+
+### What's next
+
+- **Session 2 (audit-log extraction) can now proceed against a
+  properly CI-verified baseline** — this repository's CI has actually
+  run and passed on GitHub's real infrastructure, not merely a local
+  approximation of it. The plan below is unchanged from Session 1.
 - **Session 2: audit-log extraction.** Generalise privacy-forge's
   tamper-evident, hash-chained audit log (`docs/adr/ADR-0003` in that
   repository) out of one application's models into this package: an
@@ -93,9 +189,3 @@ this is a small supporting package, not the portfolio's flagship).
 - **Session 4: Packagist publishing and upgrade docs.** Tag `v1.0.0`,
   publish to Packagist, write `UPGRADE.md` covering the Laravel-major
   boundaries the CI matrix already exercises.
-
-### Explicitly not done this session (by design)
-
-- No audit-log or consent-guard feature code — none was in scope.
-- privacy-forge's own repository was not touched in any way.
-- No Packagist publish yet — nothing worth publishing exists.
