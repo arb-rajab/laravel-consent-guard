@@ -70,6 +70,56 @@ lock on the audit table at all. An advisory lock needs no table privilege
 of any kind and still serializes "read the last hash, compute the next
 one, insert" the same way a row lock would.
 
+## Generalization decisions specific to this package
+
+privacy-forge's mechanism (hash-chaining, the advisory lock, privilege
+separation) transfers unchanged — that's the point of extracting it. What
+doesn't transfer unchanged is its shape: privacy-forge built this as one
+application's internal service against its own schema, with no concept of
+an unknown downstream consumer. Adapting it into something installed by
+`composer require` into applications this package has never seen required
+decisions privacy-forge never had to make:
+
+- **Generic `actor_type`/`actor_id`/`subject_type`/`subject_id`/
+  `metadata` instead of privacy-forge's `actor_user_id` (FK'd to its own
+  `User` model)/`resource_type`/`resource_id`/`policy_id`/`decision`/
+  `reason_code`.** privacy-forge's fields encode its own domain (a
+  `policy_id` and `decision` only make sense next to a consent/DSAR
+  engine); this package has no schema to join against in an application
+  it doesn't control, so the actor and subject are opaque strings, not
+  foreign keys, and `policy_id`/`decision`/`reason_code` collapse into
+  a single arbitrary `metadata` payload the caller shapes however their
+  own domain needs. This is *why* `metadata` exists as a `json` column
+  at all — privacy-forge never needed one.
+- **A service *and* a trait, not just a service.** privacy-forge only
+  ever needed `app(AuditLogger::class)->record(...)` called from its own
+  controllers. A package whose only entry point is a bare service class
+  asks every consumer to wire up the same "pass my model's class and
+  key as subjectType/subjectId" boilerplate by hand. `HasTamperEvidentAuditLog`
+  exists purely to remove that boilerplate for the common "this model did
+  something" case; `AuditLogger` stays available directly for entries
+  that aren't about a specific model (e.g. a batch job). Both produce
+  identical entries — the trait adds no behavior of its own.
+- **Privilege separation shipped as a console command
+  (`consent-guard:secure-audit-log`), not a migration.** privacy-forge's
+  equivalent (`add_restricted_runtime_role_for_audit_log`) was a
+  migration because it also *created* that application's runtime role —
+  a one-time bootstrap step for a schema privacy-forge already owned. A
+  package installed into an arbitrary application needs to accept which
+  role to restrict and which connection owns the table as explicit
+  input, and needs to refuse clearly when misconfigured (see the "why
+  not a self-revoke" section above) — a migration can't take options or
+  produce that kind of guided failure the way a command can.
+- **No creation of the application's runtime database role.**
+  privacy-forge's migration created `privacy_forge_app` from scratch,
+  because at that point in privacy-forge's history it didn't yet exist.
+  This package assumes its consumer already has a working runtime role
+  (they're already running a Laravel app against Postgres) — this
+  package's job starts at "narrow this existing role's privileges on one
+  table," not "provision your database roles for you." Prescribing role
+  creation/credential management for an application this package has
+  never seen would be scope creep past what a generic library should own.
+
 ## What this package deliberately does NOT do
 
 - **No external anchoring of the chain root.** privacy-forge's ADR-0003
