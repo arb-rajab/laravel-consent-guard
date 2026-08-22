@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: consent_guard_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Dev/test-only PHP CLI with the extensions the audit-log feature's test
+  # suite needs (pdo_pgsql/pgsql, pcntl/posix for the concurrency test) —
+  # not every dev machine has these natively (this one, on Windows, has
+  # none of them). Usage: `docker compose up -d`, then
+  # `docker compose exec php composer install` / `composer test`.
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: consent_guard_test
+      DB_USERNAME: consent_guard_app
+      DB_PASSWORD: consent_guard_app_password
+      DB_OWNER_USERNAME: postgres
+      DB_OWNER_PASSWORD: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sleep", "infinity"]

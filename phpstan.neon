@@ -10,5 +10,14 @@ parameters:
     tmpDir: build/phpstan
 
     ignoreErrors:
-        # Intentionally empty. Any future entry here must carry a comment
-        # explaining why the suppression is safe.
+        -
+            identifier: trait.unused
+            path: src/AuditLog/Concerns/HasTamperEvidentAuditLog.php
+            # This trait exists to be `use`d by a *consuming* application's
+            # own Eloquent models (see README.md) — nothing under `src`
+            # itself uses it, since this package ships the trait, not a
+            # model to apply it to. PHPStan can only see that it's unused
+            # within the analysed `src` path, not that it has real
+            # consumers outside the package; the trait's own test coverage
+            # (tests/Feature/AuditLog/AuditLogHashChainTest.php) applies it
+            # to a model precisely to prove it works.

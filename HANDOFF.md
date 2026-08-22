@@ -172,16 +172,168 @@ directly.
 
 ### What's next
 
-- **Session 2 (audit-log extraction) can now proceed against a
-  properly CI-verified baseline** — this repository's CI has actually
-  run and passed on GitHub's real infrastructure, not merely a local
-  approximation of it. The plan below is unchanged from Session 1.
-- **Session 2: audit-log extraction.** Generalise privacy-forge's
-  tamper-evident, hash-chained audit log (`docs/adr/ADR-0003` in that
-  repository) out of one application's models into this package: an
-  Eloquent trait driven by model `created`/`updated`/`deleted` events, a
-  migration for the audit-entry table, and a test suite exercising the
-  hash chain independent of privacy-forge's own schema.
+See Session 2 below — it supersedes the plan in this section.
+
+## Session 2 — 2026-08-22: tamper-evident audit log (generalized from privacy-forge)
+
+### What's built
+
+- **`ArbRajab\ConsentGuard\AuditLog\AuditLogger`** — hash-chained
+  `record()`/`verifyChain()`, generalized from privacy-forge's
+  `App\Services\AuditLogger` (`docs/adr/ADR-0003`, that repo's R-01 risk
+  entry). Domain-specific fields (`policy_id`, `decision`, `reason_code`,
+  a `User`-typed actor) were replaced with generic ones (`actor_type`/
+  `actor_id`, `subject_type`/`subject_id`, an arbitrary `metadata` array)
+  so the mechanism makes sense for any app, GDPR-relevant or not.
+- **`AuditLogEntry`** — append-only Eloquent model (`save()`/`delete()`
+  throw once a row exists), configurable table/connection.
+- **`Concerns\HasTamperEvidentAuditLog`** — the trait half of the
+  "trait/service" brief: `$model->recordAuditEntry(...)` for any
+  Eloquent model, delegating to `AuditLogger`.
+- **Concurrency safety**: a single, fixed, global
+  `pg_advisory_xact_lock(hashtext(...))` — not partitioned by
+  actor/subject, same reasoning as the source. Chosen over
+  `SELECT ... FOR UPDATE` for the same reason privacy-forge switched
+  (Session 27 in that repo's decision log): Postgres requires the
+  `UPDATE` privilege for row locks even though none is issued, which a
+  `SELECT`/`INSERT`-only role could never satisfy.
+- **`consent-guard:secure-audit-log`** — the privilege-separation
+  feature (DoD item 3), implemented as an installable Artisan command
+  rather than a migration: it revokes `UPDATE`/`DELETE` on the audit
+  table from the app's runtime role via a connection that must
+  authenticate as a *different*, table-owning role (refuses to run
+  otherwise — a table owner can always `GRANT` itself back the
+  privilege, so a self-revoke is not a real protection; this is the
+  exact lesson from privacy-forge's R-01). The package does not create
+  the app's runtime role itself — that's treated as host-app
+  infrastructure the package narrows, not something a generic package
+  should own.
+- Publishable `config/consent-guard.php` and
+  `database/migrations/..._create_audit_log_entries_table.php`.
+- `docs/adr/0001-audit-log-tamper-evidence.md` — this package's own ADR,
+  citing and building on privacy-forge's ADR-0003 rather than repeating
+  it, and stating plainly what's deliberately NOT included (external
+  chain anchoring, runtime-role creation, non-Postgres support).
+
+### What's proven, and how
+
+Both required proof tests pass, for real, against real infrastructure —
+not reasoned about:
+
+- **`AuditLogConcurrencyTest`**: forks 8 real OS processes (`pcntl_fork`,
+  same technique and same PDO-connection pitfalls as privacy-forge's
+  version) against a real Postgres 16 instance, then confirms the
+  resulting chain is gapless and unforked and `verifyChain()` passes.
+  **Proven to have teeth this session**: temporarily commented out the
+  `pg_advisory_xact_lock` call and added a 200ms `usleep` to widen the
+  race window — the test failed as expected (`prev_hash` mismatch at
+  sequence 2, two children forked off the same genesis hash); reverted
+  both changes, confirmed green again.
+- **`AuditLogPrivilegeSeparationTest`**: connects as the real restricted
+  role (`consent_guard_app`, confirmed distinct from the owning role via
+  `current_user`) and issues raw SQL `UPDATE`/`DELETE` against the audit
+  table — both rejected by Postgres itself with `42501`
+  (`insufficient_privilege`); a positive control confirms `SELECT`/
+  `INSERT` still work.
+- Full suite: 12/12 passing, `composer lint` (Pint) clean, `composer
+  analyse` (Larastan, level 8) clean against `src` — all run for real
+  inside a throwaway Testbench application, confirming the package
+  actually works when required into a host app, not just "should."
+
+### Why local verification needed Docker (environment note for future sessions)
+
+This feature needs PostgreSQL and, for the concurrency test, Unix
+`pcntl`/`posix` — genuinely absent on this Windows dev machine (no
+`pcntl` build exists for Windows at all; no local Postgres; WSL Ubuntu
+had neither PHP nor Postgres installed and needed a sudo password that
+wasn't available non-interactively). Rather than skip local
+verification and rely solely on CI (the fallback used in Session 1.5),
+the user started Docker Desktop and this session added
+`docker-compose.yml` + `docker/php/Dockerfile` (a PHP 8.4 CLI image with
+`pdo_pgsql`/`pgsql`/`pcntl`/`posix`) and
+`docker/postgres/init/01-create-app-role.sql` (provisions the restricted
+test role) specifically so the real proof tests above could be run and
+watched fail-then-pass locally, not just assumed from CI logs. This is
+now also the documented local dev workflow (see README.md/CONTRIBUTING.md)
+since "no database service" stopped being true of this package the
+moment the audit-log feature landed.
+
+### Bugs found and fixed while proving this for real (not caught by static analysis)
+
+- **`AuditLogEntry::sequence` was null on the instance `record()`
+  returned**, only populated on a fresh query. `sequence` is a
+  database-generated default (`nextval(...)`), and Eloquent only
+  auto-populates a primary key after insert (ours is a UUID, so there
+  was nothing for Eloquent to fetch back). Fixed by calling
+  `$entry->refresh()` before returning from `record()`. privacy-forge's
+  own version never hit this because its tests always re-queried rather
+  than asserting on the just-created instance.
+- **Anonymous PHP classes contain an embedded NUL byte** in their
+  `::class` name (`Model@anonymous` + `"\0"` + `file:line$N`), which
+  Postgres silently truncates when stored in a `text`/`varchar` column —
+  discovered because an early version of the trait's test used an
+  anonymous class as the "subject" model, and the truncated
+  round-tripped value stopped matching. Not a package bug: fixed by
+  changing the test to use a named fixture class
+  (`tests/Fixtures/Order.php`), which is what a real host application's
+  model would be anyway. Worth remembering if a future test (here or
+  elsewhere in this portfolio) is tempted to use an anonymous class as
+  a stand-in for "any model."
+
+### Decisions made this session, with reasoning
+
+- **Trait + service, not just service**: the task asked for "a
+  trait/service any Eloquent model or app can use." `AuditLogger` is the
+  service (usable directly for entries not about a specific model, e.g.
+  a batch job); `HasTamperEvidentAuditLog` is a thin trait wrapper for
+  the common "this model did something" case. Both produce identical
+  entries — the trait is pure ergonomics.
+- **Generic `subject_type`/`subject_id`/`metadata` instead of
+  privacy-forge's `resource_type`/`resource_id`/`policy_id`/`decision`/
+  `reason_code`**: the task explicitly required this package make sense
+  for an app with no GDPR concerns at all. `metadata` (a plain `json`
+  column, not `jsonb`, chosen specifically because Postgres's `json`
+  type preserves input text verbatim — `jsonb` doesn't, which would
+  break hash recomputation on read) replaces the domain-specific
+  `policy_id`/`decision`/`reason_code` triplet with an arbitrary
+  caller-supplied payload.
+- **No external chain anchoring** (privacy-forge's `anchorChain()`/
+  `verifyAnchors()`, ADR-0003's layer B): deliberately out of scope,
+  documented as such in this package's own ADR. *Where* to anchor is
+  inherently host-app-specific (S3, a signed release, another log) —
+  prescribing a destination would make this package opinionated about
+  infrastructure it has no business dictating. `verifyChain()` still
+  proves tamper evidence against single-entry edits; a full-chain
+  rewrite by a sufficiently privileged attacker is the accepted residual
+  gap, same as upstream, stated plainly rather than glossed over.
+- **The package does not create the application's runtime database
+  role.** privacy-forge's own migration did (it was bootstrapping a
+  brand-new split). A generic package's consumer already has a working
+  runtime role before installing this package; this package's job is
+  narrowing that existing role's privileges on one table, not managing
+  role/credential lifecycle for a host app it knows nothing about.
+- **Privilege separation shipped as a console command, not a
+  migration.** A migration can't take `--role`/`--owner-connection`
+  options or refuse to run with a clear error when pointed at the wrong
+  connection; a command can, and this command's safety check (refusing
+  to run when the owner connection is the same role it's asked to
+  restrict) is exactly the kind of thing that needs to be a first-class,
+  well-documented failure mode, not a migration side effect.
+- **Postgres only, stated explicitly, not implied to work elsewhere.**
+  Both differentiating mechanisms (`pg_advisory_xact_lock`, real
+  `GRANT`/`REVOKE` semantics) are genuinely Postgres-specific. README
+  and the ADR both say so plainly.
+
+### Explicitly not done this session (by design)
+
+- No consent-guard feature code (Session 3's job).
+- No external anchoring of the audit chain (see above).
+- No creation of the app's own runtime DB role (see above).
+- privacy-forge's own repository was not touched in any way (read-only
+  reference, as instructed).
+
+### What's next
+
 - **Session 3: consent-guard middleware and casts.** A `HasConsent`
   Eloquent trait, an attribute cast for consent state, and HTTP
   middleware that denies a request ahead of the controller when consent
@@ -189,3 +341,11 @@ directly.
 - **Session 4: Packagist publishing and upgrade docs.** Tag `v1.0.0`,
   publish to Packagist, write `UPGRADE.md` covering the Laravel-major
   boundaries the CI matrix already exercises.
+- **Not yet done, worth flagging explicitly**: this session's
+  `.github/workflows/ci.yml` changes (a Postgres service container, new
+  extensions, a role-provisioning step) were verified against a local
+  Docker Postgres/PHP 8.4 setup that mirrors CI's shape, but have not
+  yet been run for real on GitHub's hosted runners — Session 1.5's own
+  lesson was that local approximations and real CI can diverge. Push
+  and confirm a real green run before treating this as fully closed,
+  the same way Session 1.5 did for Session 1.
