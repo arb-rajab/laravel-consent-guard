@@ -341,11 +341,15 @@ moment the audit-log feature landed.
 - **Session 4: Packagist publishing and upgrade docs.** Tag `v1.0.0`,
   publish to Packagist, write `UPGRADE.md` covering the Laravel-major
   boundaries the CI matrix already exercises.
-- **Not yet done, worth flagging explicitly**: this session's
-  `.github/workflows/ci.yml` changes (a Postgres service container, new
-  extensions, a role-provisioning step) were verified against a local
-  Docker Postgres/PHP 8.4 setup that mirrors CI's shape, but have not
-  yet been run for real on GitHub's hosted runners — Session 1.5's own
-  lesson was that local approximations and real CI can diverge. Push
-  and confirm a real green run before treating this as fully closed,
-  the same way Session 1.5 did for Session 1.
+- **CI verified for real, same discipline as Session 1.5**: pushed
+  `feat/audit-log`, opened
+  [PR #1](https://github.com/arb-rajab/laravel-consent-guard/pull/1),
+  and watched it run on GitHub's actual hosted runners (run
+  [32577975339](https://github.com/arb-rajab/laravel-consent-guard/actions/runs/32577975339)).
+  **All 8 jobs passed on the first real run** — no repeat of Session
+  1.5's experience of local-vs-CI divergence. All 4 test-matrix cells
+  passed with the new Postgres service container, role-provisioning
+  step, and `pcntl`/`posix` extensions genuinely exercising the
+  concurrency test on real GitHub infrastructure, not just this
+  session's local Docker approximation of it. Only pre-existing,
+  unrelated Node.js 20 deprecation annotations, same as Session 1.5.
