@@ -706,3 +706,175 @@ added direct proof of that; no production code changed.
 Session 4 as already scoped above: real integration proof, compatibility
 matrix, release readiness, Packagist publishing. Nothing about this
 session changes that scope.
+
+## Session 4 — 2026-08-23: real integration proof, release readiness, v1.0.0
+
+Final session before this package is considered genuinely finished. No
+production code changed — this was verification, documentation, and
+release-tagging, not feature work.
+
+### 1. Real integration proof (not just Testbench)
+
+Built a fresh, separate `laravel/laravel` application (13.26.1, the
+current latest) inside this repo's own `docker compose` `php` service
+(chosen because it already has `pdo_pgsql`/`pgsql` and network access to
+the same Postgres instance, and creating a throwaway app inside it needs
+no new image), at `/tmp/integration-app` — outside this repository's own
+tree entirely, not committed anywhere.
+
+- **Installed via a genuine `composer require`**, not a Testbench dev
+  dependency: `composer config repositories.consent-guard path /app`
+  (where `/app` is this repository, bind-mounted into the container) then
+  `composer require arb-rajab/laravel-consent-guard:@dev`. Composer
+  resolved and symlinked it as `dev-main 5956f04` — the actual current
+  `main` commit at the time, not a hand-copied approximation.
+- **Wired up for real**: published the package's config and migrations
+  via `vendor:publish` (the real tags, not hand-copied files), added a
+  `pgsql_owner` Postgres connection alongside the app's own restricted
+  `pgsql` connection (mirroring `tests/TestCase.php`'s two-connection
+  pattern, since this shared Docker sandbox's `consent_guard_app` role
+  starts with zero schema privileges — the same caveat Session 3 already
+  documented for the test harness, not a package flaw), ran all
+  migrations via the owner connection, granted the app role ordinary CRUD
+  on every table, then ran the package's own
+  `consent-guard:secure-audit-log --owner-connection=pgsql_owner --role=consent_guard_app`
+  to lock the audit log table down specifically — the exact three-step
+  sequence this package's own README documents, run for real end to end
+  in an app that has never seen this package's internals.
+- **Both features driven through real HTTP requests**, not `tinker`
+  shortcuts pretending to be a request cycle: `App\Models\User` was made
+  a `ConsentSubject` (`HasConsent` trait, `phone` cast behind
+  `ConsentRequired::class.':marketing_sms'`), a demo route was gated with
+  `consent-guard:marketing_email`, and `php artisan serve` was started
+  inside the container so `curl` (also run inside the container, with a
+  cookie jar) could authenticate via session login and hit real
+  endpoints:
+  - `/gated` returned `403` before any consent existed, `200` after
+    `$user->grantConsent('marketing_email')`, and `403` again after
+    `$user->withdrawConsent('marketing_email')` — proving the middleware
+    re-checks live on every request rather than caching.
+  - `/phone` (the cast) returned `403` for `marketing_sms` even with
+    `marketing_email` already granted — proving purpose isolation is
+    real, not just asserted — then `200` with the correct value once
+    `marketing_sms` was separately granted.
+  - `/audit/record`, hit three times, produced three real hash-chained
+    rows; `/audit/verify` reported `{"valid":true,"brokenAtSequence":null}`.
+- **Privilege separation re-proven against this app's own live database**,
+  not the test sandbox: connecting directly as `consent_guard_app` (via
+  `docker compose exec postgres psql -U consent_guard_app`) and issuing
+  raw `UPDATE`/`DELETE` against `audit_log_entries` both failed with
+  Postgres's own `permission denied for table audit_log_entries` —
+  the exact role this specific running application uses for its default
+  connection, not a role constructed only for a test.
+- **Tamper detection proven to have teeth in this app too**: connecting as
+  the *owner* role (`postgres`, which can bypass table privileges) and
+  directly `UPDATE`-ing one entry's `action` column flipped
+  `/audit/verify`'s response to `{"valid":false,"brokenAtSequence":2}`;
+  restoring the original value flipped it back to `valid: true`. This
+  confirms `verifyChain()` isn't unconditionally reporting success — it
+  genuinely inspects the chain in this deployed app's own database.
+
+This closes the gap Session 3's `HANDOFF.md` entry itself flagged: proof
+so far was "genuinely works when required into a host app" only in the
+sense of Orchestra Testbench's in-process, purpose-built test harness —
+this session proves the same claims in an application that has no
+knowledge of this package's test infrastructure at all.
+
+### 2. CI compatibility matrix re-confirmed for real, on the current commit
+
+Re-ran the same discipline Session 2.5 used (read actual per-cell logs,
+not the aggregate "N jobs passed" summary), against the *current* `main`
+HEAD (`5956f04`, run `32600158207`), not an older cached claim:
+
+| Matrix cell | Result |
+|---|---|
+| PHP 8.2, Laravel ^12.0 | `42 passed (103 assertions)` |
+| PHP 8.3, Laravel ^12.0 | `42 passed (103 assertions)` |
+| PHP 8.3, Laravel ^13.0 | `42 passed (103 assertions)` |
+| PHP 8.4, Laravel ^13.0 | `42 passed (103 assertions)` |
+
+All four cells independently ran and passed on GitHub's real hosted
+runners. The matrix genuinely re-resolves `illuminate/*`/`orchestra/testbench`
+per cell (see the "Select Laravel/Testbench versions for this matrix
+cell" step in `ci.yml`) rather than testing one resolution four times.
+
+### 3. README finished
+
+Added, rather than left implicit or scattered across session prose:
+
+- A dedicated "What's extracted from privacy-forge, and what's newly
+  designed" section, stated feature by feature (previously this
+  distinction existed only in `HANDOFF.md`'s own session narration).
+- A "Proven end-to-end, in a real separate application" section
+  summarizing item 1 above, with a pointer to this file for the full
+  transcript.
+- A "Packagist publishing" section (see item 5 below) and an
+  "Installation" caveat that the package isn't on Packagist yet, so a
+  stranger reading the Installation section's `composer require` line
+  isn't misled into thinking it will resolve today.
+- The Roadmap's Session 4 entry updated from future tense to what was
+  actually done.
+
+The rest of the README (Requirements, both features' usage examples,
+Development/Docker workflow) was reviewed and found already accurate and
+complete from Session 3 — no changes needed there.
+
+### 4. Version tagged: `v1.0.0`, not a `0.x` series
+
+**Reasoning**: this portfolio's standard for "done" is real infrastructure
+proof, not aspiration — fault-injection tests for both fail-closed
+guarantees (audit-log concurrency, consent fail-closed, the cast's write
+path), genuine privilege-separation proof against real Postgres roles, a
+CI matrix that actually re-resolves and runs four real cells, and now (this
+session) a real integration proof in a separate application. Every one of
+those bars was already met *before* this session, which only added the
+one proof (external-app integration) that was still missing. A `0.x` tag
+would signal "still stabilizing" or "API might change without a major
+bump" — neither is true here: the public API surface (`AuditLogger`,
+`HasTamperEvidentAuditLog`, `ConsentManager`, `HasConsent`/`ConsentSubject`,
+`ConsentRequired`, `EnsureConsentGranted`, both console commands) is
+small, deliberate, and already exercised by real tests including the ones
+designed specifically to catch it being silently wrong (see Session 2's
+concurrency fault-injection and Session 3/3.5's consent fault-injection).
+`v1.0.0` is a real commitment to semver stability from here, backed by
+`UPGRADE.md` (added this session, currently stating there's nothing to
+upgrade from yet) as the place future breaking changes get documented.
+
+Tagged locally on `main` at the commit that includes this session's
+docs-only changes (README, CHANGELOG, UPGRADE.md, this entry), after that
+commit's CI run was confirmed green — same branch → PR → required-checks
+discipline as every other session since 2.5.
+
+### 5. Packagist publishing: explicitly deferred, human-only step
+
+**Not done, and not fabricated.** No Packagist account credentials exist
+in this environment — same situation as privacy-forge's cloud-provisioning
+step. What a human needs to do, exactly (also recorded in README.md's new
+"Packagist publishing" section so it isn't only in this session log):
+
+1. Create or sign in to a Packagist account.
+2. Submit `https://github.com/arb-rajab/laravel-consent-guard` as a new
+   package (Packagist reads `composer.json` from the repo directly).
+3. Add the GitHub auto-update webhook (Packagist's one-click "GitHub
+   Hook" setup, which needs GitHub access granted to Packagist) so future
+   tags publish automatically.
+4. Confirm `composer require arb-rajab/laravel-consent-guard` resolves
+   from a machine with no `path`-repository override.
+
+### Explicitly not done this session (by design)
+
+- No Packagist publish (see above — genuinely blocked on credentials this
+  environment doesn't have, not skipped by choice).
+- No production code changes — this session's proof surfaced no bugs
+  (unlike Sessions 2 and 3, which each found real ones while proving
+  their features). Every real-app check passed on the first attempt.
+- No new features. Both features are exactly as Session 2/3 left them.
+
+### What's next
+
+**Nothing required for this package to be considered done at `v1.0.0`
+except the human Packagist step above.** If a future session picks this
+back up, the natural next real feature (not scoped or started here) would
+be external chain-anchoring for the audit log (deliberately left out of
+Session 2's ADR as a host-app-specific concern) — but that's a new
+feature for a hypothetical `v1.1.0`/`v2.0.0`, not unfinished `v1.0.0` work.

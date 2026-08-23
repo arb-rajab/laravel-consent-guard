@@ -6,6 +6,58 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing pending — see `v1.0.0` below for this package's first release.
+
+## [1.0.0] - 2026-08-23
+
+This is the package's first tagged release. Chosen as `1.0.0` rather than
+a pre-1.0 series because the bar this portfolio holds features to —
+real infrastructure proof, fault-injection tests for the fail-closed
+guarantees, a genuine (not aspirational) CI version matrix, and now a real
+integration proof in a separate application — was already met before this
+tag, not something still being worked toward; see Session 4 below for
+what specifically was added to confirm that ahead of tagging.
+
+### Added (Session 4, 2026-08-23)
+- **Real integration proof**: this package installed via a genuine
+  `composer require` (against a local `path` repository standing in for
+  Packagist, which this package isn't published to yet) into a fresh,
+  separate `laravel/laravel` 13.26.1 application — not just required as a
+  Testbench dev dependency inside this repository's own test suite. Both
+  features were driven through real HTTP requests against that
+  application's own `php artisan serve` process (a session-authenticated
+  consent-guard-gated route: 403 → grant → 200 → withdraw → 403 again; a
+  `ConsentRequired`-cast field correctly isolating one purpose's consent
+  from another's; real hash-chained audit log entries recorded and
+  verified), and the privilege-separation guarantee was independently
+  re-confirmed against that application's own live database connection
+  (not the test sandbox) — `consent_guard_app` rejected with `42501` on
+  direct `UPDATE`/`DELETE`, and `verifyChain()` correctly flipped to
+  `valid: false` at the right sequence number after the owning role
+  tampered with a row. See `HANDOFF.md`'s Session 4 entry for the full
+  transcript.
+- **CI version-compatibility matrix re-confirmed against real, current
+  logs** (not re-asserted from an earlier session's summary): pulled the
+  latest `main` CI run and grepped each of the 4 matrix cells' own
+  `Tests: ... passed` lines directly — PHP 8.2/Laravel 12, PHP 8.3/Laravel
+  12, PHP 8.3/Laravel 13, and PHP 8.4/Laravel 13 each independently
+  reported `42 passed (103 assertions)`.
+- README: a new "What's extracted from privacy-forge, and what's newly
+  designed" section stating, feature by feature, exactly what was
+  extracted/generalized (the audit log) versus designed from scratch
+  (consent guard) — previously this distinction was scattered across
+  prose rather than given its own honest, explicit section. A new "Proven
+  end-to-end, in a real separate application" section summarizing this
+  session's integration proof. A "Packagist publishing" section stating
+  plainly that publishing requires a real Packagist account this
+  environment does not have, with the exact steps a human needs to take.
+- `UPGRADE.md`: added ahead of actually needing content, so this
+  package's first real breaking change has an obvious place to land. States
+  there is nothing to upgrade from yet (first release) and that Laravel
+  12/13 support is identical in behavior on both, per the CI matrix.
+- No production code changed this session — this was a release-readiness
+  and verification session, not a feature session.
+
 ### Added (Session 3, 2026-08-22)
 - Consent guard: new package design (not extracted from privacy-forge),
   inspired by that repository's fail-closed policy-evaluator *principle*
