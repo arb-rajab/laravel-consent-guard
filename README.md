@@ -66,6 +66,40 @@ This repository now ships two real features:
 
 See Roadmap below for what's still to come.
 
+## What's extracted from privacy-forge, and what's newly designed
+
+Stated plainly, feature by feature, rather than left to be inferred from ADR
+cross-references:
+
+- **Audit log — extracted and generalized.** The hash-chain mechanism
+  itself (`entry_hash = sha256(prev_hash + fields)`, `pg_advisory_xact_lock`
+  for concurrency safety, real Postgres `GRANT`/`REVOKE` for privilege
+  separation) is privacy-forge's `App\Services\AuditLogger`
+  (that repo's ADR-0003, risk entry R-01), carried over largely as-is
+  because it's genuine Postgres mechanics, not application logic. What
+  changed in the extraction: domain-specific fields (`policy_id`,
+  `decision`, `reason_code`, a `User`-typed actor) were replaced with
+  generic ones (`actor_type`/`actor_id`, `subject_type`/`subject_id`, an
+  arbitrary `metadata` array) so the mechanism makes sense for an app with
+  no GDPR concerns at all; the privilege-separation step became an
+  installable Artisan command instead of a one-off migration; and the
+  package deliberately does not create the host app's runtime database
+  role (privacy-forge's own migration did, since it was bootstrapping a
+  brand-new split within one application it fully owned). See
+  [`docs/adr/0001-audit-log-tamper-evidence.md`](docs/adr/0001-audit-log-tamper-evidence.md)
+  for the full reasoning.
+- **Consent guard — new design, not an extraction.** No privacy-forge code
+  was reused for this feature at all. What's borrowed is a *principle*:
+  privacy-forge's `docs/adr/ADR-0006-policy-evaluator-fail-closed.md` was
+  read (read-only) for its fail-closed reasoning before this feature's own
+  `ConsentManager::isGranted()` was designed as this package's single
+  fail-closed choke point — privacy-forge's `PolicyEvaluator` code was
+  never imported, depended on, or even copied from. The data model
+  (current-state `ConsentRecord`, one row per subject+purpose), the
+  cast/middleware/trait API surface, and the retention-sweep command are
+  all designed from scratch for this package. See
+  [`docs/adr/0002-consent-guard-fail-closed.md`](docs/adr/0002-consent-guard-fail-closed.md).
+
 ## Requirements
 
 - PHP 8.2+
@@ -79,6 +113,11 @@ See Roadmap below for what's still to come.
   Eloquent CRUD and works on any database Laravel supports.
 
 ## Installation
+
+> **Not yet on Packagist** — see "Packagist publishing" below. Until then,
+> require it via a [path or VCS repository](https://getcomposer.org/doc/05-repositories.md#path)
+> pointing at this repository; the command below is what it becomes once
+> published.
 
 ```bash
 composer require arb-rajab/laravel-consent-guard
@@ -230,6 +269,37 @@ Unlike the audit log, there is no privilege-separation step — consent
 records need ordinary full CRUD from the application's own runtime role,
 and nothing here is Postgres-specific.
 
+## Proven end-to-end, in a real separate application
+
+Every claim above has been verified against real infrastructure, not
+reasoned about — including, as of this package's `v1.0.0` release, a real
+integration proof that goes beyond this repository's own Testbench-based
+test suite:
+
+- A fresh `laravel/laravel` (13.26.1) application was built from scratch
+  and this package installed into it with a genuine
+  `composer require arb-rajab/laravel-consent-guard` (via a local `path`
+  repository standing in for Packagist, since this package isn't published
+  there yet — see "Packagist publishing" below), not required as a
+  Testbench dev dependency.
+- Both features were driven through **real HTTP requests** against that
+  separate application's own `php artisan serve` process: a
+  session-authenticated user hitting a `consent-guard`-gated route (403
+  before consent, 200 after granting it, 403 again after withdrawing it —
+  proving the check is live, not cached), a `ConsentRequired`-cast field
+  correctly isolating one purpose's consent from another's, and an
+  `AuditLogger`-backed endpoint recording real hash-chained entries.
+- The privilege-separation guarantee was verified against **that
+  application's own live database**, not the test sandbox: connecting
+  directly as `consent_guard_app` (the exact role the running app uses)
+  and confirming Postgres itself rejects `UPDATE`/`DELETE` on the audit
+  log table with `42501 permission denied`, while `AuditLogger::verifyChain()`
+  correctly reports `valid: true` normally and `valid: false` (with the
+  exact broken sequence number) after the table-owning role tampers with
+  one row directly.
+
+See `HANDOFF.md`'s Session 4 entry for the full transcript of this proof.
+
 ## Development
 
 This package's test suite now needs real PostgreSQL (see above) plus, for
@@ -273,16 +343,41 @@ portfolio:
   `HasTamperEvidentAuditLog` trait any Eloquent model can use, plus the
   privilege-separation feature (`consent-guard:secure-audit-log`) that
   makes "no UPDATE/DELETE" something Postgres itself enforces.
-- **Session 3 (this one): consent guard.** New package design (not an
+- **Session 3: consent guard.** New package design (not an
   extraction): a `ConsentRequired` cast and `HasConsent`/`ConsentSubject`
   pairing that gate an Eloquent attribute behind a named consent purpose,
   an `EnsureConsentGranted` middleware that gates a route the same way,
   and `consent-guard:sweep-expired-consent` for retention. Fail-closed by
   principle (inspired by, but not sharing code with, privacy-forge's
   policy-evaluator ADR).
-- **Session 4: Packagist publishing and upgrade documentation.**
-  Tagged `v1.0.0`, published to Packagist, with an `UPGRADE.md` for the
-  Laravel-major boundaries the CI matrix already covers.
+- **Session 4 (this one): release readiness.** A real integration proof
+  in a separate throwaway Laravel application (see "Proven end-to-end"
+  above), the version-compatibility matrix re-confirmed against real CI
+  logs, this README finished for a real stranger to follow, `v1.0.0`
+  tagged, and `UPGRADE.md` added. **Packagist publishing itself is a
+  deferred, human-only step** — see below.
+
+## Packagist publishing
+
+This package is not yet published to Packagist. Doing so requires a real
+Packagist account and submitting the repository there, which is not
+something that can be done from this environment (no such credentials
+exist here) — the same situation as the cloud-provisioning step in
+privacy-forge: a human step, stated plainly rather than faked. To publish
+`v1.0.0` once tagged:
+
+1. Create (or sign in to) a [Packagist](https://packagist.org) account.
+2. Submit `https://github.com/arb-rajab/laravel-consent-guard` as a new
+   package. Packagist reads `composer.json` directly from the repository,
+   so no separate metadata upload is needed.
+3. On the package's Packagist settings page, add the GitHub webhook (or
+   use Packagist's own "GitHub Hook" one-click setup, which requires
+   granting Packagist access to the GitHub account/org) so new tags are
+   picked up automatically — without it, updates require manually clicking
+   "Update" on Packagist after every future release.
+4. Confirm `composer require arb-rajab/laravel-consent-guard` resolves the
+   package from a machine that has never had the `path` repository
+   override this README's own integration proof used.
 
 ## License
 
