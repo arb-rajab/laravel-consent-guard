@@ -3,7 +3,7 @@
 # cloned and run"). Exists because the audit-log feature genuinely needs
 # Postgres and real forked OS processes (pcntl) to test, which many dev
 # machines (this one included) don't have natively.
-FROM php:8.4-cli
+FROM php:8.5-cli
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
