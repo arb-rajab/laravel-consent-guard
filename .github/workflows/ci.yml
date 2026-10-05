@@ -11,7 +11,7 @@ jobs:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Run gitleaks
@@ -23,7 +23,7 @@ jobs:
     name: Lint (Laravel Pint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -54,7 +54,7 @@ jobs:
     name: Static analysis (Larastan / PHPStan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -132,7 +132,7 @@ jobs:
       DB_OWNER_USERNAME: postgres
       DB_OWNER_PASSWORD: postgres
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -193,7 +193,7 @@ jobs:
     name: Dependency vulnerability scan (osv-scanner)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run osv-scanner
         uses: google/osv-scanner-action/osv-scanner-action@v2.6.0
         with:
