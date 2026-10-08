@@ -22,6 +22,7 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 ## Notes
 
 - No osv-scanner config in this repo.
+- Every workflow declares a top-level `permissions: contents: read` (added 2026-10-08, rescan cycle 3). Jobs that need more, such as CodeQL's `security-events: write`, declare it at job level.
 - Merge policy (deliberate choice by the repo owner, 2026-10-08): every PR, major-version dependency bumps included, is merged as soon as all of its required checks are green, confirmed per PR. This repo is a code showcase with no business or sensitive dependency, so green checks are the only gate. Red, pending or conflicted PRs are fixed or closed instead.
 
 ## Deferred (not re-raised each pass)
