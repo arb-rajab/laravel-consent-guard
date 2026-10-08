@@ -4,10 +4,10 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 
 ## Configuration
 
-- Ecosystems covered: composer (`/`), docker (`/docker/php`), github-actions (`/`).
+- Ecosystems covered: composer (`/`), docker (`/docker/php`), github-actions (`/`), docker-compose (`/`).
 - Grouping: `minor-and-patch` for every ecosystem (open-PR limit 5 each).
 - Schedule: weekly.
-- Ignore rules: none.
+- Ignore rules: docker-compose image majors (stateful services need a deliberate migration).
 
 ## State at last update
 
