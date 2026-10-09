@@ -14,6 +14,7 @@ jobs:
   secrets-scan:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,6 +27,7 @@ jobs:
   lint:
     name: Lint (Laravel Pint)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -57,6 +59,7 @@ jobs:
   analyse:
     name: Static analysis (Larastan / PHPStan)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -85,6 +88,7 @@ jobs:
   test:
     name: Tests (Pest via Testbench) — PHP ${{ matrix.php }}, Laravel ${{ matrix.laravel }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       # Real version-support matrix, not a single pinned combination: the
@@ -196,6 +200,7 @@ jobs:
   dependency-scan:
     name: Dependency vulnerability scan (osv-scanner)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Run osv-scanner
