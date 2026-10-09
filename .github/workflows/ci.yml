@@ -13,7 +13,7 @@ permissions:
 jobs:
   secrets-scan:
     name: Secret scanning (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -25,7 +25,7 @@ jobs:
 
   lint:
     name: Lint (Laravel Pint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -56,7 +56,7 @@ jobs:
 
   analyse:
     name: Static analysis (Larastan / PHPStan)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -84,7 +84,7 @@ jobs:
 
   test:
     name: Tests (Pest via Testbench) — PHP ${{ matrix.php }}, Laravel ${{ matrix.laravel }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       # Real version-support matrix, not a single pinned combination: the
@@ -143,7 +143,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           # pcntl/posix: real-process concurrency test (Unix-only, hence
-          # this job's ubuntu-latest runner — there is no Windows build).
+          # this job's ubuntu-24.04 runner — there is no Windows build).
           # pdo_pgsql/pgsql: the audit log's only supported database.
           extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite, pdo_pgsql, pgsql, pcntl, posix
           coverage: none
@@ -195,7 +195,7 @@ jobs:
 
   dependency-scan:
     name: Dependency vulnerability scan (osv-scanner)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Run osv-scanner
